@@ -1,17 +1,28 @@
 import uuid
 import requests
+import threading
+import time
 import json
 import copy
 import userinfo
 import sys
+import logging
+from logging.handlers import RotatingFileHandler
+
+# 定时器开关
+# is_running = True
+timer_thread = None
+
+# 停止事件
+stop_event = threading.Event()
 
 # 请求头
 headers = {
     'accept': 'application/json,text/plain,*/*',
     'accept-language': 'zh-CN,zh;q=0.9',
     'content-type': 'application/json',
-    'origin': 'https://tongyi.aliyun.com',
-    'referer': 'https://tongyi.aliyun.com/chat',
+    'origin': 'https://qianwen.aliyun.com',
+    'referer': 'https://qianwen.aliyun.com/chat',
     'sec-ch-ua': '\\"MicrosoftEdge\\";v=\\"111\\",\\"Not(A:Brand\\";v=\\"8\\",\\"Chromium\\";v=\\"111\\"',
     'sec-ch-ua-mobile': '?0',
     'sec-ch-ua-platform': '"macOS"',
@@ -23,9 +34,34 @@ headers = {
     'cookie': userinfo.cookie # cookie
 }
 
+# 心跳
+def heartbeat():
+    api = requests.get('https://qianwen.aliyun.com/heartbeat?type=1&', headers=headers)
+    log('\n心跳：' + str(api.status_code))
+    pass
+
+# 心跳定时器
+def timer():
+    while not stop_event.is_set():
+        # 定时执行的操作
+        heartbeat()
+        # 等待停止事件，设置适当的超时时间
+        stop_event.wait(timeout=5)
+
+def log(data):
+    # 配置日志记录
+    log_formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
+    log_handler = RotatingFileHandler(filename='app.log', maxBytes=1024*1024*1024, backupCount=3)
+    log_handler.setFormatter(log_formatter)
+    logging.basicConfig(level=logging.INFO, handlers=[log_handler])
+
+    # 日志记录
+    logging.info(data)
+
+
 # 添加会话凭证
 def addSession(q):
-    data = senReq('https://tongyi.aliyun.com/qianwen/addSession', {
+    data = senReq('https://qianwen.aliyun.com/addSession', {
         'firstQuery': q
     }, headers)
     if len(data) != 0:
@@ -38,7 +74,7 @@ def addSession(q):
         return {}
 
 def querySessionList():
-    data = senReq('https://tongyi.aliyun.com/qianwen/querySessionList', {}, headers)
+    data = senReq('https://qianwen.aliyun.com/querySessionList', {}, headers)
     if isinstance(data, list) and len(data) != 0:
         # 遍历列表
         for index, item in enumerate(data):
@@ -55,7 +91,7 @@ def querySessionList():
 
 # 获取上一个问题信息
 def getParentMsg(s):
-    data = senReq('https://tongyi.aliyun.com/qianwen/queryMessageList', {
+    data = senReq('https://qianwen.aliyun.com/queryMessageList', {
         'sessionId': s
     }, headers)
     try:
@@ -65,7 +101,9 @@ def getParentMsg(s):
             msgId = message['msgId'] # 获取消息id
             return msgId
         else:
-            print('当前为会话的初始的聊天')
+            info = '当前为会话的初始的聊天'
+            print(info)
+            log(info)
             return 0
     except:
         return 0    
@@ -88,26 +126,30 @@ def chat(q, pId, sId, ifSearch):
         'openSearch': ifSearch,
         'sessionId': sId,
         'model': ''
-    } # 创建消息体
+    } 
+    # 创建消息体
     payload = json.dumps(data)
-    response = requests.request('POST','https://tongyi.aliyun.com/qianwen/conversation', headers=chat_header, data=payload,stream=True)
+    response = requests.request('POST', 'https://qianwen.aliyun.com/conversation', headers=chat_header, data=payload, stream=True)
     previous_content = ''
-    for line in response.iter_lines():
+    for line in response.iter_lines(decode_unicode=True):
         if line:
-            stripped_line = line.decode('utf-8').replace('data:', '')
-            # print(stripped_line)
+            stripped_line = line.replace('data:', '')
             try:
                 data = json.loads(stripped_line)
                 content = data['content'][0]
-                # # 去除已经包含在前一条数据中的部分
+                # 去除已经包含在前一条数据中的部分
                 if content.startswith(previous_content):
                     content = content.replace(previous_content, '', 1).strip()
-                print(content.strip(), end='',flush=True)
-                previous_content = data['content'][0]  # 更新前一条数据
-            except json.decoder.JSONDecodeError as e:
-                # print(f"Failed to decode JSON: {e}")    
-                pass
 
+                for char in content:
+                    sys.stdout.write(char)
+                    log(char)
+                    sys.stdout.flush()
+                    time.sleep(0.01)  # 添加适当的延迟
+                previous_content = data['content'][0]# 更新前一条数据
+            except json.decoder.JSONDecodeError as e:
+                log(e.msg)
+                pass
 # 发送请求
 def senReq(url, data, headers):
     payload = json.dumps(data)
@@ -118,16 +160,21 @@ def senReq(url, data, headers):
             data = res_data['data']
             return data
         else:
-            print('请求接口出错了')
+            info = '请求接口出错了'
+            print(info)
+            log(info)
             return {}
     else:
-        print('登录信息异常，请重新更新登录数据')
+        info = '登录信息异常，请重新更新登录数据'
+        print(info)
+        log(info)
         return {}
 
 # 判断是否Json数据，如果是Html说明登录信息异常
 def isJson(str):
     try:
         data = json.loads(str)
+        log(data)
     except ValueError:
         return False
     return True
@@ -179,9 +226,17 @@ def checkIfSearch():
             print("请输入正确的选项！")
     return ans   
 
+def quit():
+    # global is_running
+    # is_running = False
+    print("\n感谢您使用通义千问，欢迎再次使用！")    
+    stop_event.set()
+
 # Main入口
 if __name__ == '__main__':
     try:
+        timer_thread = threading.Thread(target=timer)
+        timer_thread.start()
         # 固定回复，不发起请求
         print('我是来自达摩院的大规模语言模型，我叫通义千问。我是达摩院自主研发的超大规模语言模型，也能够回答问题、创作文字，还能表达观点、撰写代码。如果您有任何问题或需要帮助，请随时告诉我，我会尽力提供支持。')
         sId = checkIfLoadSession() # 获取会话Id
@@ -195,7 +250,7 @@ if __name__ == '__main__':
                 lastChatId = getParentMsg(sId) # 获取上一条消息的id
                 chat(q, lastChatId,sId,ifSearch) # 发送消息
             else:
-                break    
-        print("\n感谢您使用通义千问，欢迎再次使用！")       
+                break  
+        quit()
     except KeyboardInterrupt:
-        print("\n感谢您使用通义千问，欢迎再次使用！")    
+        quit()
