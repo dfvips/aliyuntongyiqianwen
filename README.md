@@ -7,7 +7,7 @@
 - 需要在userinfo.py中填写cookie, token (window.csrfToken & document.cookie)
 ### 示例图片
 
-<img alt="image" src="https://github.com/dfvips/aliyuntongyiqianwen/assets/21048630/84789051-23da-492d-846b-48aa21d63859">
+![demo](https://github.com/dfvips/aliyuntongyiqianwen/assets/21048630/197e8644-3c51-4fbd-bff6-abf2f192c920)
 
 ### Star
 
